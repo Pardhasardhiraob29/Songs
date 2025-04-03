@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gesture Music Player</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/handpose"></script>
+    <style>
+        /* CSS from previous example remains the same */
+        body {
+    font-family: Arial, sans-serif;
+    background-color: #121212;
+    color: #ffffff;
+    text-align: center;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100vh;
+}
+
+/* Player Container */
+.player-container {
+    background: #1e1e1e;
+    padding: 20px;
+    border-radius: 10px;
+    box-shadow: 0 0 10px rgba(255, 255, 255, 0.1);
+    max-width: 400px;
+    width: 90%;
+}
+
+/* Video Container */
+.video-container {
+    position: relative;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+video, canvas {
+    width: 100%;
+    border-radius: 10px;
+}
+
+/* Controls */
+.controls {
+    margin-top: 15px;
+}
+
+button {
+    background: #ff5722;
+    color: white;
+    border: none;
+    padding: 10px 15px;
+    margin: 5px;
+    border-radius: 5px;
+    cursor: pointer;
+    transition: background 0.3s;
+}
+
+button:hover {
+    background: #e64a19;
+}
+
+#volumeBar {
+    width: 80%;
+    margin-top: 10px;
+}
+
+/* Gesture Feedback */
+#gestureFeedback {
+    margin-top: 10px;
+    font-size: 1.2em;
+    font-weight: bold;
+    color: #ff9800;
+}
+
+/* Song Info */
+#songInfo {
+    margin-top: 15px;
+}
+
+#songTitle {
+    font-size: 1.5em;
+    font-weight: bold;
+    margin: 5px 0;
+}
+
+#artist {
+    font-size: 1em;
+    color: #bbbbbb;
+}
+
+    </style>
+</head>
+<body>
+    <!-- HTML structure from previous example remains the same -->
+    <div class="player-container">
+        <h1>Gesture Music Player</h1>
+        
+        <div class="video-container">
+            <video id="videoElement" autoplay muted playsinline></video>
+            <canvas id="canvasOutput"></canvas>
+        </div>
+        
+        <div class="controls">
+            <button id="startButton">Enable Gesture Control</button>
+            <button id="playPauseButton">Play</button>
+            <input type="range" id="volumeBar" min="0" max="100" value="50">
+            
+            <div id="gestureFeedback"></div>
+            <div id="songInfo">
+                <h2 id="songTitle">No song loaded</h2>
+                <p id="artist"></p>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        // DOM elements
+        const videoElement = document.getElementById('videoElement');
+        const canvasOutput = document.getElementById('canvasOutput');
+        const ctx = canvasOutput.getContext('2d');
+        const startButton = document.getElementById('startButton');
+        const playPauseButton = document.getElementById('playPauseButton');
+        const gestureFeedback = document.getElementById('gestureFeedback');
+        const songTitle = document.getElementById('songTitle');
+        const artist = document.getElementById('artist');
+        const volumeBar = document.getElementById('volumeBar');
+        const audioElement = new Audio();
+        
+        // App state
+        let model = null;
+        let isGestureControlActive = false;
+        let currentSongIndex = 0;
+        let songs = [];
+        let volume = 0.5;
+        
+        // Initialize the app
+        async function init() {
+            // Load handpose model
+            model = await handpose.load();
+            
+            // Set up video stream
+            if (navigator.mediaDevices.getUserMedia) {
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    video: { facingMode: 'user' }, 
+                    audio: false 
+                });
+                videoElement.srcObject = stream;
+                
+                videoElement.onloadedmetadata = () => {
+                    canvasOutput.width = videoElement.videoWidth;
+                    canvasOutput.height = videoElement.videoHeight;
+                };
+            }
+            
+            // Load songs from backend
+            loadSongs();
+            
+            // Set up event listeners
+            startButton.addEventListener('click', toggleGestureControl);
+            playPauseButton.addEventListener('click', togglePlayPause);
+            volumeBar.addEventListener('input', updateVolume);
+            
+            // Start with first song
+            loadSong(currentSongIndex);
+        }
+        
+        // Load songs from backend
+        async function loadSongs() {
+            try {
+                const response = await fetch('http://localhost:5001/api/songs');
+                songs = await response.json();
+                if (songs.length > 0) {
+                    loadSong(currentSongIndex);
+                }
+            } catch (err) {
+                console.error('Error loading songs:', err);
+            }
+        }
+        
+        // Load a specific song
+        async function loadSong(index) {
+            if (songs.length === 0) return;
+            
+            currentSongIndex = index;
+            const song = songs[currentSongIndex];
+            
+            try {
+                const response = await fetch(`http://localhost:5001/api/songs/${song.id}`);
+                if (response.ok) {
+                    const blob = await response.blob();
+                    audioElement.src = URL.createObjectURL(blob);
+                    songTitle.textContent = song.title;
+                    artist.textContent = song.artist;
+                    
+                    if (isGestureControlActive) {
+                        audioElement.play();
+                        playPauseButton.textContent = 'Pause';
+                    }
+                }
+            } catch (err) {
+                console.error('Error loading song:', err);
+            }
+        }
+        
+        // Toggle gesture control
+        function toggleGestureControl() {
+            isGestureControlActive = !isGestureControlActive;
+            
+            if (isGestureControlActive) {
+                startButton.textContent = 'Disable Gesture Control';
+                detectGestures();
+                gestureFeedback.textContent = 'Show your hand to the camera';
+            } else {
+                startButton.textContent = 'Enable Gesture Control';
+                gestureFeedback.textContent = '';
+            }
+        }
+        
+        // Toggle play/pause
+        function togglePlayPause() {
+            if (audioElement.paused) {
+                audioElement.play();
+                playPauseButton.textContent = 'Pause';
+            } else {
+                audioElement.pause();
+                playPauseButton.textContent = 'Play';
+            }
+        }
+        
+        // Update volume
+        function updateVolume() {
+            volume = volumeBar.value / 100;
+            audioElement.volume = volume;
+        }
+        
+        // Main gesture detection loop
+        async function detectGestures() {
+            if (!isGestureControlActive) return;
+            
+            try {
+                const predictions = await model.estimateHands(videoElement);
+                ctx.clearRect(0, 0, canvasOutput.width, canvasOutput.height);
+                
+                if (predictions.length > 0) {
+                    drawHand(predictions[0].landmarks);
+                    const gesture = detectGesture(predictions[0].landmarks);
+                    
+                    if (gesture) {
+                        handleGesture(gesture);
+                        sendGestureToBackend(gesture);
+                    }
+                }
+            } catch (err) {
+                console.error('Error detecting hands:', err);
+            }
+            
+            requestAnimationFrame(detectGestures);
+        }
+        
+        // Draw hand landmarks
+        function drawHand(landmarks) {
+            ctx.fillStyle = 'red';
+            landmarks.forEach(point => {
+                ctx.beginPath();
+                ctx.arc(point[0], point[1], 5, 0, 2 * Math.PI);
+                ctx.fill();
+            });
+        }
+        
+        // Detect specific gestures
+        function detectGesture(landmarks) {
+            const wrist = landmarks[0];
+            const thumbTip = landmarks[4];
+            const indexTip = landmarks[8];
+            const middleTip = landmarks[12];
+            const ringTip = landmarks[16];
+            const pinkyTip = landmarks[20];
+            
+            // Calculate average position of fingertips
+            const avgX = (thumbTip[0] + indexTip[0] + middleTip[0] + ringTip[0] + pinkyTip[0]) / 5;
+            const avgY = (thumbTip[1] + indexTip[1] + middleTip[1] + ringTip[1] + pinkyTip[1]) / 5;
+            
+            // Wave left (fingers to left of wrist)
+            if (avgX < wrist[0] - 50) {
+                return 'wave_left';
+            }
+            
+            // Wave right (fingers to right of wrist)
+            if (avgX > wrist[0] + 50) {
+                return 'wave_right';
+            }
+            
+            // Palm up (fingers above wrist)
+            if (avgY < wrist[1] - 50) {
+                return 'palm_up';
+            }
+            
+            // Palm down (fingers below wrist)
+            if (avgY > wrist[1] + 50) {
+                return 'palm_down';
+            }
+            
+            return null;
+        }
+        
+        // Handle detected gestures
+        function handleGesture(gesture) {
+            switch (gesture) {
+                case 'wave_left':
+                    nextSong();
+                    gestureFeedback.textContent = 'Next Song →';
+                    break;
+                case 'wave_right':
+                    previousSong();
+                    gestureFeedback.textContent = '← Previous Song';
+                    break;
+                case 'palm_up':
+                    increaseVolume();
+                    gestureFeedback.textContent = 'Volume Up ↑';
+                    break;
+                case 'palm_down':
+                    decreaseVolume();
+                    gestureFeedback.textContent = 'Volume Down ↓';
+                    break;
+            }
+            
+            setTimeout(() => {
+                gestureFeedback.textContent = 'Show your hand to the camera';
+            }, 1000);
+        }
+        
+        // Send gesture to backend
+        async function sendGestureToBackend(gesture) {
+            try {
+                await fetch('http://localhost:5001/api/gesture', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ gesture })
+                });
+            } catch (err) {
+                console.error('Error sending gesture:', err);
+            }
+        }
+        
+        // Song navigation
+        function nextSong() {
+            currentSongIndex = (currentSongIndex + 1) % songs.length;
+            loadSong(currentSongIndex);
+        }
+        
+        function previousSong() {
+            currentSongIndex = (currentSongIndex - 1 + songs.length) % songs.length;
+            loadSong(currentSongIndex);
+        }
+        
+        // Volume control
+        function increaseVolume() {
+            volume = Math.min(volume + 0.1, 1);
+            volumeBar.value = volume * 100;
+            audioElement.volume = volume;
+        }
+        
+        function decreaseVolume() {
+            volume = Math.max(volume - 0.1, 0);
+            volumeBar.value = volume * 100;
+            audioElement.volume = volume;
+        }
+        
+        // Initialize when page loads
+        window.onload = init;
+    </script>
+</body>
+</html>
